@@ -82,8 +82,6 @@ pub struct Wallet {
     pub version: u8,
     pub coin: Coin,
     pub address: String,
-    /// Version 1 wallets have no birthday and require a historical rescan.
-    #[serde(default)]
     pub birthday: u64,
     salt: [u8; 16],
     nonce: [u8; 12],
@@ -100,17 +98,13 @@ fn password_key(password: &str, salt: &[u8; 16]) -> Result<Zeroizing<[u8; 32]>> 
 
 impl Wallet {
     fn aad(&self) -> String {
-        let base = format!(
-            "wally:{}:{}:{}",
+        format!(
+            "wally:{}:{}:{}:{}",
             self.version,
             self.coin.name(),
-            self.address
-        );
-        if self.version == 1 {
-            base
-        } else {
-            format!("{base}:{}", self.birthday)
-        }
+            self.address,
+            self.birthday
+        )
     }
 
     pub fn create(coin: Coin, password: &str) -> Result<Self> {
@@ -162,10 +156,7 @@ impl Wallet {
     }
 
     pub fn validate(&self) -> Result<()> {
-        ensure!(
-            self.version == 1 || self.version == 2,
-            "Unsupported wallet format"
-        );
+        ensure!(self.version == 2, "Unsupported wallet format");
         ensure!(
             self.encrypted_key.len() == 48,
             "Invalid encrypted key length"
@@ -407,6 +398,9 @@ mod tests {
             assert_eq!(no_change.output.len(), 1);
             assert_eq!(actual_fee, fee + 1);
             let mut tampered = wallet;
+            tampered.birthday += 1;
+            assert!(tampered.unlock(password).is_err());
+            tampered.birthday -= 1;
             tampered.address = coin.address(&SecretKey::from_slice(&[2; 32])?);
             assert!(tampered.unlock(password).is_err());
         }

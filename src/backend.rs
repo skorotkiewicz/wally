@@ -190,6 +190,7 @@ impl Headers {
                 .last()
                 .context("Empty header chain")?
                 .block_hash();
+            let old_work = candidate.total_work;
             let response = peer.headers(candidate.locator())?;
             let mut bytes = response.as_slice();
             let count: VarInt = chain::decode(&mut bytes)?;
@@ -246,6 +247,10 @@ impl Headers {
             ensure!(
                 candidate.entries.len() <= 6_000_000,
                 "Header chain exceeds the supported cache size"
+            );
+            ensure!(
+                batches == 0 || candidate.total_work > old_work,
+                "Peer did not advance chain work"
             );
             batches += 1;
             if batches.is_multiple_of(25) && candidate.total_work > self.total_work {
@@ -427,7 +432,12 @@ impl State {
 
     fn save(&self, path: &Path) -> Result<()> {
         write_atomic(path, |writer| {
-            serde_json::to_writer(writer, self)?;
+            serde_json::to_writer(&mut *writer, self)?;
+            writer.flush()?;
+            ensure!(
+                writer.get_ref().metadata()?.len() <= 128 * 1024 * 1024,
+                "Wallet scan cache exceeds the supported size; previous state preserved"
+            );
             Ok(())
         })
     }
