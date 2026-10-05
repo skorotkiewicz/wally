@@ -182,7 +182,8 @@ impl Peer {
     }
 
     pub fn headers(&mut self, locator: Vec<BlockHash>) -> Result<Vec<u8>> {
-        let request = GetHeadersMessage::new(locator, BlockHash::all_zeros());
+        let mut request = GetHeadersMessage::new(locator, BlockHash::all_zeros());
+        request.version = 70015;
         self.send("getheaders", &consensus::serialize(&request))?;
         self.wait_for("headers")
     }

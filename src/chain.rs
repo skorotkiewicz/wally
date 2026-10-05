@@ -226,7 +226,7 @@ pub fn next_bits(headers: &[Header], base: u32, coin: Coin) -> Result<CompactTar
     let last = headers.last().context("Missing previous header")?;
     if coin == Coin::Bitcoin {
         let height = base + u32::try_from(headers.len())?;
-        if height % 2016 != 0 {
+        if !height.is_multiple_of(2016) {
             return Ok(last.bits);
         }
         let start = headers

@@ -59,6 +59,7 @@ struct Headers {
     base: u32,
     anchor: usize,
     entries: Vec<Header>,
+    total_work: Work,
 }
 
 impl Headers {
@@ -76,12 +77,22 @@ impl Headers {
             .context("Unknown block height")
     }
 
-    fn work(&self) -> Work {
-        self.entries[self.anchor..]
+    fn work_of(entries: &[Header]) -> Work {
+        entries
             .iter()
             .fold(Work::from_be_bytes([0; 32]), |sum, header| {
                 sum + header.work()
             })
+    }
+
+    fn save(&self, path: &Path) -> Result<()> {
+        write_atomic(path, |writer| {
+            writer.write_all(HEADER_MAGIC)?;
+            for header in &self.entries {
+                writer.write_all(&consensus::serialize(header))?;
+            }
+            Ok(())
+        })
     }
 
     fn load(path: &Path, coin: Coin, peers: &mut [Peer]) -> Result<Self> {
@@ -98,10 +109,11 @@ impl Headers {
             let mut raw = Vec::new();
             file.take(500_000_001).read_to_end(&mut raw)?;
             ensure!(
-                raw.starts_with(HEADER_MAGIC) && (raw.len() - HEADER_MAGIC.len()) % 80 == 0,
+                raw.starts_with(HEADER_MAGIC)
+                    && (raw.len() - HEADER_MAGIC.len()).is_multiple_of(80),
                 "Invalid header cache"
             );
-            for raw in raw[HEADER_MAGIC.len()..].chunks_exact(80) {
+            for raw in raw[HEADER_MAGIC.len()..].as_chunks::<80>().0 {
                 entries.push(consensus::deserialize(raw)?);
             }
         } else if coin == Coin::Bitcoin {
@@ -138,6 +150,7 @@ impl Headers {
         Ok(Self {
             base,
             anchor,
+            total_work: Self::work_of(&validated[anchor..]),
             entries: validated,
         })
     }
@@ -159,14 +172,20 @@ impl Headers {
         result
     }
 
-    fn sync_peer(&self, peer: &mut Peer, coin: Coin) -> Result<Self> {
+    fn sync_peer(&self, path: &Path, peer: &mut Peer, coin: Coin) -> Result<Self> {
         let mut candidate = Self {
             base: self.base,
             anchor: self.anchor,
             entries: self.entries.clone(),
+            total_work: self.total_work,
         };
-        let now = peer::now()?;
+        let mut batches = 0_u32;
         loop {
+            let old_tip = candidate
+                .entries
+                .last()
+                .context("Empty header chain")?
+                .block_hash();
             let response = peer.headers(candidate.locator())?;
             let mut bytes = response.as_slice();
             let count: VarInt = chain::decode(&mut bytes)?;
@@ -176,6 +195,9 @@ impl Headers {
                     bytes.is_empty() && candidate.tip() >= peer.height,
                     "Peer withheld headers or sent malformed headers"
                 );
+                if candidate.total_work > self.total_work {
+                    candidate.save(path)?;
+                }
                 return Ok(candidate);
             }
             for index in 0..count.0 {
@@ -192,11 +214,39 @@ impl Headers {
                         .rposition(|h| h.block_hash() == header.prev_blockhash)
                         .context("Fork does not connect to the trusted checkpoint")?;
                     ensure!(parent >= self.anchor, "Fork predates checkpoint");
-                    candidate.entries.truncate(parent + 1);
+                    if parent + 1 != candidate.entries.len() {
+                        candidate.entries.truncate(parent + 1);
+                        candidate.total_work =
+                            Self::work_of(&candidate.entries[candidate.anchor..]);
+                    }
                 }
-                chain::append_header(&mut candidate.entries, candidate.base, coin, header, now)?;
+                chain::append_header(
+                    &mut candidate.entries,
+                    candidate.base,
+                    coin,
+                    header,
+                    peer::now()?,
+                )?;
+                candidate.total_work = candidate.total_work + header.work();
             }
             ensure!(bytes.is_empty(), "Trailing header bytes");
+            ensure!(
+                candidate
+                    .entries
+                    .last()
+                    .context("Empty header chain")?
+                    .block_hash()
+                    != old_tip,
+                "Peer repeated the same header batch"
+            );
+            ensure!(
+                candidate.entries.len() <= 6_000_000,
+                "Header chain exceeds the supported cache size"
+            );
+            batches += 1;
+            if batches.is_multiple_of(25) && candidate.total_work > self.total_work {
+                candidate.save(path)?;
+            }
             eprintln!(
                 "Verified {} headers through height {}",
                 coin.name(),
@@ -209,10 +259,10 @@ impl Headers {
         let mut responses = 0;
         let mut errors = Vec::new();
         for peer in peers {
-            match self.sync_peer(peer, coin) {
+            match self.sync_peer(path, peer, coin) {
                 Ok(candidate) => {
                     responses += 1;
-                    if candidate.work() > self.work() {
+                    if candidate.total_work > self.total_work {
                         *self = candidate;
                     }
                 }
@@ -229,22 +279,16 @@ impl Headers {
                 >= peer::now()?,
             "Chain tip is stale; refusing to report a current balance or send"
         );
-        write_atomic(path, |writer| {
-            writer.write_all(HEADER_MAGIC)?;
-            for header in &self.entries {
-                writer.write_all(&consensus::serialize(header))?;
-            }
-            Ok(())
-        })
+        self.save(path)
     }
 }
 
 fn fetch_block(peers: &mut [Peer], coin: Coin, hash: BlockHash) -> Result<Vec<u8>> {
     for peer in peers {
-        if let Ok(raw) = peer.block(hash) {
-            if chain::read_block(&raw, coin, hash).is_ok() {
-                return Ok(raw);
-            }
+        if let Ok(raw) = peer.block(hash)
+            && chain::read_block(&raw, coin, hash).is_ok()
+        {
+            return Ok(raw);
         }
     }
     bail!("No peer supplied a valid block {hash}")
