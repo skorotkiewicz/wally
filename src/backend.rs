@@ -736,3 +736,29 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "downloads and verifies all Bitcoin mainnet headers; no keys or payments"]
+    fn complete_bitcoin_header_sync() -> Result<()> {
+        let directory =
+            std::env::temp_dir().join(format!("wally-header-check-{}", std::process::id()));
+        fs::create_dir_all(&directory)?;
+        let path = directory.join("bitcoin.headers");
+        let mut peers = peer::discover(Coin::Bitcoin, &[])?;
+        let mut headers = Headers::load(&path, Coin::Bitcoin, &mut peers)?;
+        headers.sync(&path, Coin::Bitcoin, &mut peers, &[])?;
+        assert!(headers.tip() >= chain::BITCOIN_CHECKPOINT_HEIGHT);
+        assert_eq!(peers.len(), 2);
+        let restored = Headers::load(&path, Coin::Bitcoin, &mut [])?;
+        assert_eq!(restored.entries, headers.entries);
+        eprintln!(
+            "Complete Bitcoin header sync and cache reload verified through {}",
+            headers.tip()
+        );
+        Ok(())
+    }
+}
