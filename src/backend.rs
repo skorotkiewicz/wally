@@ -36,7 +36,9 @@ pub fn write_atomic(
     path: &Path,
     write: impl FnOnce(&mut BufWriter<fs::File>) -> Result<()>,
 ) -> Result<()> {
-    let temporary = path.with_extension("tmp");
+    let mut temporary_name = path.as_os_str().to_os_string();
+    temporary_name.push(".tmp");
+    let temporary = PathBuf::from(temporary_name);
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -578,6 +580,107 @@ impl Session {
                 transaction.compute_txid()
             );
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::{Amount, TxIn, TxOut, Txid, absolute, hashes::Hash, transaction};
+
+    fn entry(block: &bitcoin::Block, height: u32, tx: &Transaction) -> Entry {
+        let proof = MerkleBlock::from_block_with_predicate(block, |id| *id == tx.compute_txid());
+        Entry {
+            height,
+            proof: hex::encode(consensus::serialize(&proof)),
+            transactions: vec![hex::encode(consensus::serialize(tx))],
+        }
+    }
+
+    #[test]
+    fn cached_proofs_spends_and_reorg_pending_recovery() -> Result<()> {
+        let own = ScriptBuf::new_p2pkh(&bitcoin::PubkeyHash::from_byte_array([1; 20]));
+        let funding = Transaction {
+            version: transaction::Version::ONE,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: Txid::from_byte_array([1; 32]),
+                    vout: 0,
+                },
+                ..TxIn::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(200_000),
+                script_pubkey: own.clone(),
+            }],
+        };
+        let genesis = bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Bitcoin);
+        let mut block = bitcoin::Block {
+            header: genesis.header,
+            txdata: vec![genesis.txdata[0].clone(), funding.clone()],
+        };
+        block.header.prev_blockhash = genesis.block_hash();
+        block.header.merkle_root = block.compute_merkle_root().context("Missing merkle root")?;
+        let mut headers = Headers {
+            base: 0,
+            anchor: 0,
+            entries: vec![genesis.header, block.header],
+            total_work: Work::from_be_bytes([0; 32]),
+        };
+        let mut state = State {
+            version: 1,
+            address: "test".into(),
+            height: 1,
+            hash: block.block_hash().to_string(),
+            history: vec![entry(&block, 1, &funding)],
+            outgoing: Vec::new(),
+        };
+        let mut ledger = state.ledger(&headers, &own)?;
+        assert_eq!(ledger.values().map(|o| o.value).sum::<u64>(), 200_000);
+        let spend = Transaction {
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: funding.compute_txid(),
+                    vout: 0,
+                },
+                ..TxIn::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(199_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+            ..funding.clone()
+        };
+        state
+            .outgoing
+            .push(hex::encode(consensus::serialize(&spend)));
+        assert_eq!(state.pending_transactions()?.len(), 1);
+        assert!(apply(&mut ledger, &own, &spend, 2)?);
+        assert!(ledger.is_empty());
+        let mut confirmed = bitcoin::Block {
+            header: block.header,
+            txdata: vec![genesis.txdata[0].clone(), spend.clone()],
+        };
+        confirmed.header.prev_blockhash = block.block_hash();
+        confirmed.header.merkle_root = confirmed
+            .compute_merkle_root()
+            .context("Missing merkle root")?;
+        headers.entries.push(confirmed.header);
+        state.height = 2;
+        state.history.push(entry(&confirmed, 2, &spend));
+        assert!(state.pending_transactions()?.is_empty());
+        assert!(state.ledger(&headers, &own)?.is_empty());
+        // Remove the confirming block: the exact old payment becomes pending again.
+        state.history.pop();
+        state.height = 1;
+        assert_eq!(state.pending_transactions()?, vec![spend]);
+        let mut tampered = funding;
+        tampered.output[0].value = Amount::from_sat(999_999);
+        state.history[0].transactions[0] = hex::encode(consensus::serialize(&tampered));
+        assert!(state.ledger(&headers, &own).is_err());
+        assert_eq!(anchor(Coin::Dogecoin)?.2.to_string(), DOGE_HASH);
         Ok(())
     }
 }
