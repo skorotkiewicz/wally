@@ -122,7 +122,7 @@ impl Wallet {
             }
         };
         let mut wallet = Self {
-            version: 2,
+            version: 1,
             coin,
             address: coin.address(&key),
             // Account for block timestamp variation and clock drift when scanning.
@@ -156,7 +156,7 @@ impl Wallet {
     }
 
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.version == 2, "Unsupported wallet format");
+        ensure!(self.version == 1, "Unsupported wallet format");
         ensure!(
             self.encrypted_key.len() == 48,
             "Invalid encrypted key length"
