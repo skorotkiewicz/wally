@@ -384,3 +384,57 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use crate::chain;
+    use bitcoin::VarInt;
+
+    #[test]
+    #[ignore = "read-only public mainnet connectivity check"]
+    fn public_mainnet_headers_and_blocks() -> Result<()> {
+        for coin in [Coin::Bitcoin, Coin::Dogecoin] {
+            let mut peers = discover(coin, &[])?;
+            let hash = match coin {
+                Coin::Bitcoin => {
+                    bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Bitcoin)
+                        .block_hash()
+                }
+                Coin::Dogecoin => {
+                    "e7d4577405223918491477db725a393bcfc349d8ee63b0a4fde23cbfbfd81dea".parse()?
+                }
+            };
+            for peer in &mut peers {
+                let raw = peer.block(hash)?;
+                let block = chain::read_block(&raw, coin, hash)?;
+                let response = peer.headers(vec![hash])?;
+                let mut bytes = response.as_slice();
+                let count: VarInt = chain::decode(&mut bytes)?;
+                ensure!(
+                    count.0 > 0 && count.0 <= 2000,
+                    "Unexpected mainnet header count"
+                );
+                let next = chain::read_header(&mut bytes, coin, true)?;
+                ensure!(
+                    next.prev_blockhash == hash,
+                    "Mainnet headers do not link to anchor"
+                );
+                if coin == Coin::Dogecoin {
+                    let previous = peer.block(block.header.prev_blockhash)?;
+                    let previous = chain::read_block(&previous, coin, block.header.prev_blockhash)?;
+                    ensure!(
+                        next.bits
+                            == chain::next_bits(&[previous.header, block.header], 5_049_999, coin)?,
+                        "Live DigiShield target mismatch"
+                    );
+                }
+                eprintln!(
+                    "Read-only {} checkpoint and first child header verified",
+                    coin.name()
+                );
+            }
+        }
+        Ok(())
+    }
+}
