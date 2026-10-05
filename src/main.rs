@@ -81,6 +81,8 @@ fn save(dir: &Path, name: &str, wallet: &Wallet) -> Result<()> {
         .context("Cannot create wallet file; existing wallets are never overwritten")?;
     file.write_all(&serde_json::to_vec_pretty(wallet)?)?;
     file.sync_all()?;
+    #[cfg(unix)]
+    fs::File::open(dir)?.sync_all()?;
     Ok(())
 }
 
@@ -253,7 +255,8 @@ mod tests {
         let own = ScriptBuf::new();
         let previous = Transaction {
             version: transaction::Version::ONE, lock_time: absolute::LockTime::ZERO,
-            input: vec![], output: vec![TxOut { value: Amount::from_sat(123), script_pubkey: own.clone() }],
+            input: vec![bitcoin::TxIn::default()],
+            output: vec![TxOut { value: Amount::from_sat(123), script_pubkey: own.clone() }],
         };
         let raw = hex::encode(consensus::serialize(&previous));
         let mut utxo = Utxo { outpoint: OutPoint { txid: previous.compute_txid(), vout: 0 }, value: 123 };

@@ -81,15 +81,15 @@ impl Wallet {
         ensure!(password.chars().count() >= 12, "Use a password of at least 12 characters");
         let mut bytes = Zeroizing::new([0; 32]);
         let key = loop {
-            OsRng.fill_bytes(&mut *bytes);
+            OsRng.try_fill_bytes(&mut *bytes).context("OS randomness unavailable")?;
             if let Ok(key) = SecretKey::from_slice(&*bytes) { break key; }
         };
         let mut wallet = Self {
             version: 1, coin, address: coin.address(&key), salt: [0; 16], nonce: [0; 12],
             encrypted_key: Vec::new(),
         };
-        OsRng.fill_bytes(&mut wallet.salt);
-        OsRng.fill_bytes(&mut wallet.nonce);
+        OsRng.try_fill_bytes(&mut wallet.salt).context("OS randomness unavailable")?;
+        OsRng.try_fill_bytes(&mut wallet.nonce).context("OS randomness unavailable")?;
         let encryption_key = password_key(password, &wallet.salt)?;
         wallet.encrypted_key = ChaCha20Poly1305::new_from_slice(&*encryption_key)
             .map_err(|_| anyhow::anyhow!("Invalid encryption key"))?
