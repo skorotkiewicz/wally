@@ -291,3 +291,89 @@ pub fn append_header(
     headers.push(header);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bitcoin_and_dogecoin_proofs_and_difficulty() -> Result<()> {
+        let genesis = bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Bitcoin);
+        let raw = consensus::serialize(&genesis);
+        assert_eq!(
+            read_block(&raw, Coin::Bitcoin, genesis.block_hash())?,
+            genesis
+        );
+        read_header(&mut raw.as_slice(), Coin::Bitcoin, true)?;
+        let mut corrupt = consensus::serialize(&genesis.header);
+        corrupt[76] ^= 1;
+        assert!(read_header(&mut corrupt.as_slice(), Coin::Bitcoin, true).is_err());
+        assert!(read_block(&raw[..raw.len() - 1], Coin::Bitcoin, genesis.block_hash()).is_err());
+        assert!(read_header(&mut raw.as_slice(), Coin::Dogecoin, true).is_err());
+
+        // Public mainnet fixture from dogecoin 0.5.5 src/block.rs (MIT/Apache-2.0).
+        let raw = hex::decode(include_str!("../tests/data/dogecoin-block.hex").trim())?;
+        let mut bytes = raw.as_slice();
+        let header = read_header(&mut bytes, Coin::Dogecoin, true)?;
+        assert_eq!(
+            header.block_hash().to_string(),
+            "fb5f5b5b7d70e660c2c67bca8d3328afae32ae8bb4c8d6cbc42d96ff876b0859"
+        );
+        assert_eq!(
+            read_block(&raw, Coin::Dogecoin, header.block_hash())?
+                .txdata
+                .len(),
+            10
+        );
+        let mut bytes = &raw[80..];
+        let mut auxiliary = AuxPow::read(&mut bytes)?;
+        auxiliary.coinbase_branch[0][0] ^= 1;
+        assert!(auxiliary.verify(&header).is_err());
+        auxiliary.coinbase_branch[0][0] ^= 1;
+        auxiliary.chain_index ^= 1;
+        assert!(auxiliary.verify(&header).is_err());
+        auxiliary.chain_index ^= 1;
+        auxiliary.parent.nonce ^= 1;
+        assert!(auxiliary.verify(&header).is_err());
+        assert!(branch(&mut [31].as_slice()).is_err());
+        assert!(merkle([0; 32], &[], 1).is_err());
+
+        // Exact DigiShield vectors from Dogecoin Core v1.14.9 dogecoin_tests.cpp.
+        for (previous_time, last_time, bits, expected) in [
+            (1395094427, 1395094679, 0x1b499dfd, 0x1b671062),
+            (1395100835, 1395101360, 0x1b3439cd, 0x1b4e56b3),
+            (1395380517, 1395380447, 0x1b446f21, 0x1b335358),
+            (1395094679, 1395094727, 0x1b671062, 0x1b6558a4),
+        ] {
+            let mut previous = header;
+            previous.time = previous_time;
+            let mut last = header;
+            last.time = last_time;
+            last.bits = CompactTarget::from_consensus(bits);
+            assert_eq!(
+                next_bits(&[previous, last], 5_050_000, Coin::Dogecoin)?.to_consensus(),
+                expected
+            );
+        }
+        let mut epoch = vec![genesis.header; 2016];
+        epoch[2015].time = epoch[0].time + 604800;
+        assert_eq!(
+            next_bits(&epoch, 0, Coin::Bitcoin)?.to_consensus(),
+            0x1c7fff80
+        );
+        let mut next = genesis.header;
+        next.prev_blockhash = epoch[2015].block_hash();
+        next.bits = CompactTarget::from_consensus(0x1d00ffff);
+        assert!(
+            append_header(
+                &mut epoch,
+                0,
+                Coin::Bitcoin,
+                next,
+                u64::from(next.time) + 7200
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+}

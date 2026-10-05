@@ -287,3 +287,100 @@ pub fn discover(coin: Coin, explicit: &[String]) -> Result<Vec<Peer>> {
         coin.name()
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn local_peer_handshake_requests_and_relay() -> Result<()> {
+        for coin in [Coin::Bitcoin, Coin::Dogecoin] {
+            let listener = TcpListener::bind("127.0.0.1:0")?;
+            let address = listener.local_addr()?;
+            let genesis = bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Bitcoin);
+            let expected = genesis.clone();
+            let server = std::thread::spawn(move || -> Result<()> {
+                let (stream, address) = listener.accept()?;
+                stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+                let mut peer = Peer {
+                    stream,
+                    coin,
+                    height: 0,
+                };
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let (command, payload) = peer.receive(deadline)?;
+                assert_eq!(command, "version");
+                let mut version: VersionMessage = consensus::deserialize(&payload)?;
+                version.services = ServiceFlags::NETWORK | ServiceFlags::WITNESS;
+                version.receiver = Address::new(&address, version.services);
+                peer.send("version", &consensus::serialize(&version))?;
+                peer.send("verack", &[])?;
+                assert_eq!(peer.receive(deadline)?.0, "verack");
+                let (command, payload) = peer.receive(deadline)?;
+                assert_eq!(command, "getheaders");
+                let request: GetHeadersMessage = consensus::deserialize(&payload)?;
+                assert_eq!(request.locator_hashes, vec![expected.block_hash()]);
+                peer.send("headers", &[0])?;
+                let (command, payload) = peer.receive(deadline)?;
+                assert_eq!(command, "getdata");
+                let request: Vec<Inventory> = consensus::deserialize(&payload)?;
+                assert_eq!(
+                    request[0].network_hash(),
+                    Some(expected.block_hash().to_byte_array())
+                );
+                peer.send("block", &consensus::serialize(&expected))?;
+                let (command, payload) = peer.receive(deadline)?;
+                assert_eq!(command, "inv");
+                peer.send("getdata", &payload)?;
+                let (command, payload) = peer.receive(deadline)?;
+                assert_eq!(command, "tx");
+                assert_eq!(
+                    consensus::deserialize::<Transaction>(&payload)?,
+                    expected.txdata[0]
+                );
+                assert_eq!(peer.receive(deadline)?.0, "ping"); // receive automatically sends pong
+                Ok(())
+            });
+            let mut peer = Peer::connect(address, coin)?;
+            assert_eq!(peer.headers(vec![genesis.block_hash()])?, vec![0]);
+            assert_eq!(
+                peer.block(genesis.block_hash())?,
+                consensus::serialize(&genesis)
+            );
+            peer.broadcast(&genesis.txdata[0])?;
+            server.join().expect("local peer panicked")?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_messages_are_rejected_before_allocation() -> Result<()> {
+        for damage in 0..4 {
+            let listener = TcpListener::bind("127.0.0.1:0")?;
+            let stream = TcpStream::connect(listener.local_addr()?)?;
+            let (mut sender, _) = listener.accept()?;
+            let mut payload = frame(Coin::Bitcoin, "verack", &[])?;
+            match damage {
+                0 => payload[0] ^= 1,
+                1 => payload[20] ^= 1,
+                2 => payload[16..20].copy_from_slice(&(MAX_MESSAGE as u32 + 1).to_le_bytes()),
+                _ => {
+                    payload[4] = b'!';
+                }
+            }
+            sender.write_all(&payload)?;
+            let mut peer = Peer {
+                stream,
+                coin: Coin::Bitcoin,
+                height: 0,
+            };
+            assert!(
+                peer.receive(Instant::now() + Duration::from_secs(2))
+                    .is_err()
+            );
+        }
+        assert!(frame(Coin::Bitcoin, "too_long_a_command", &[]).is_err());
+        Ok(())
+    }
+}
