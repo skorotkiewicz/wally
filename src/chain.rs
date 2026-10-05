@@ -10,6 +10,11 @@ use bitcoin::{
 };
 use num_bigint::BigUint;
 
+// Public, immutable mainnet checkpoint immediately before Taproot activation.
+pub const BITCOIN_CHECKPOINT_HEIGHT: u32 = 709_631;
+pub const BITCOIN_CHECKPOINT_HASH: &str =
+    "000000000000000000013712fc242ee6dd28476d0e9c931c75f83e6974c6bccc";
+
 pub fn take<'a>(bytes: &mut &'a [u8], len: usize) -> Result<&'a [u8]> {
     ensure!(bytes.len() >= len, "Truncated peer payload");
     let (head, tail) = bytes.split_at(len);
@@ -270,6 +275,12 @@ pub fn append_header(
     header: Header,
     now: u64,
 ) -> Result<()> {
+    if coin == Coin::Bitcoin && base + u32::try_from(headers.len())? == BITCOIN_CHECKPOINT_HEIGHT {
+        ensure!(
+            header.block_hash().to_string() == BITCOIN_CHECKPOINT_HASH,
+            "Bitcoin checkpoint mismatch"
+        );
+    }
     let last = headers.last().context("Missing chain anchor")?;
     ensure!(
         header.prev_blockhash == last.block_hash(),

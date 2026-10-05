@@ -101,7 +101,9 @@ impl Headers {
         let (base, anchor, hash) = anchor(coin)?;
         let mut entries = Vec::new();
         if path.try_exists()? {
-            // Local header cache is trusted storage: PoW was checked before each header was saved.
+            // ponytail: trusted local cache skips repeated PoW; retain AuxPoW proofs and
+            // reverify on reload if filesystem integrity cannot be trusted. Network PoW
+            // is always checked before saving a header.
             // Difficulty, linkage and the fixed checkpoint are still checked on every reload.
             let file = fs::File::open(path)?;
             ensure!(
@@ -257,30 +259,80 @@ impl Headers {
         }
     }
 
-    fn sync(&mut self, path: &Path, coin: Coin, peers: &mut [Peer]) -> Result<()> {
-        let mut responses = 0;
+    fn sync(
+        &mut self,
+        path: &Path,
+        coin: Coin,
+        peers: &mut Vec<Peer>,
+        explicit: &[String],
+    ) -> Result<()> {
+        let mut accepted = Vec::new();
+        let mut ips = HashSet::new();
         let mut errors = Vec::new();
-        for peer in peers {
-            match self.sync_peer(path, peer, coin) {
-                Ok(candidate) => {
-                    responses += 1;
-                    if candidate.total_work > self.total_work {
-                        *self = candidate;
+        let mut candidates = std::mem::take(peers);
+        for attempt in 0..3 {
+            if attempt > 0 {
+                match peer::discover(coin, explicit) {
+                    Ok(found) => candidates = found,
+                    Err(error) => {
+                        errors.push(error.to_string());
+                        continue;
                     }
                 }
-                Err(error) => errors.push(error.to_string()),
+            }
+            for mut peer in candidates.drain(..) {
+                let ip = peer.address()?.ip();
+                if ips.contains(&ip) {
+                    continue;
+                }
+                match self.sync_peer(path, &mut peer, coin) {
+                    Ok(candidate) => {
+                        if candidate.total_work > self.total_work {
+                            *self = candidate;
+                        }
+                        ips.insert(ip);
+                        accepted.push(peer);
+                        if accepted.len() == 2 {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("Replacing failed peer: {error:#}");
+                        errors.push(error.to_string());
+                        // Resume verified batches rather than repeating expensive Scrypt work.
+                        if path.try_exists()? {
+                            let cached = Self::load(path, coin, &mut [])?;
+                            if cached.total_work > self.total_work {
+                                *self = cached;
+                            }
+                        }
+                    }
+                }
+            }
+            if accepted.len() == 2 {
+                break;
             }
         }
         ensure!(
-            responses >= 2,
+            accepted.len() == 2,
             "Two-peer header synchronization failed: {}",
             errors.join("; ")
         );
+        if coin == Coin::Bitcoin {
+            ensure!(
+                self.get(chain::BITCOIN_CHECKPOINT_HEIGHT)?
+                    .block_hash()
+                    .to_string()
+                    == chain::BITCOIN_CHECKPOINT_HASH,
+                "Chain has not reached the known Bitcoin checkpoint"
+            );
+        }
         ensure!(
             u64::from(self.entries.last().context("Empty header chain")?.time) + 6 * 3600
                 >= peer::now()?,
             "Chain tip is stale; refusing to report a current balance or send"
         );
+        *peers = accepted;
         self.save(path)
     }
 }
@@ -436,7 +488,7 @@ impl Session {
         let mut peers = peer::discover(wallet.coin, explicit)?;
         let header_path = dir.join(format!("{}.headers", wallet.coin.name()));
         let mut headers = Headers::load(&header_path, wallet.coin, &mut peers)?;
-        headers.sync(&header_path, wallet.coin, &mut peers)?;
+        headers.sync(&header_path, wallet.coin, &mut peers, explicit)?;
         let own = wallet.coin.script(&wallet.address)?;
         let state_path = dir.join(format!("{name}.state"));
         let start = headers

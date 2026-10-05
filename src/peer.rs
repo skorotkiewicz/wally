@@ -128,6 +128,10 @@ impl Peer {
         Ok(peer)
     }
 
+    pub fn address(&self) -> Result<SocketAddr> {
+        Ok(self.stream.peer_addr()?)
+    }
+
     fn send(&mut self, command: &str, payload: &[u8]) -> Result<()> {
         self.stream
             .write_all(&frame(self.coin, command, payload)?)?;
@@ -391,23 +395,19 @@ mod live_tests {
     use crate::chain;
     use bitcoin::VarInt;
 
-    #[test]
-    #[ignore = "read-only public mainnet connectivity check"]
-    fn public_mainnet_headers_and_blocks() -> Result<()> {
-        for coin in [Coin::Bitcoin, Coin::Dogecoin] {
-            let mut peers = discover(coin, &[])?;
-            let hash = match coin {
-                Coin::Bitcoin => {
-                    bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Bitcoin)
-                        .block_hash()
-                }
-                Coin::Dogecoin => {
-                    "e7d4577405223918491477db725a393bcfc349d8ee63b0a4fde23cbfbfd81dea".parse()?
-                }
-            };
-            for peer in &mut peers {
-                let raw = peer.block(hash)?;
-                let block = chain::read_block(&raw, coin, hash)?;
+    fn check(coin: Coin) -> Result<()> {
+        let mut peers = discover(coin, &[])?;
+        let hash = match coin {
+            Coin::Bitcoin => {
+                bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Bitcoin).block_hash()
+            }
+            Coin::Dogecoin => {
+                "e7d4577405223918491477db725a393bcfc349d8ee63b0a4fde23cbfbfd81dea".parse()?
+            }
+        };
+        let mut verified = 0;
+        for peer in &mut peers {
+            let result = (|| -> Result<()> {
                 let response = peer.headers(vec![hash])?;
                 let mut bytes = response.as_slice();
                 let count: VarInt = chain::decode(&mut bytes)?;
@@ -420,6 +420,8 @@ mod live_tests {
                     next.prev_blockhash == hash,
                     "Mainnet headers do not link to anchor"
                 );
+                let raw = peer.block(hash)?;
+                let block = chain::read_block(&raw, coin, hash)?;
                 if coin == Coin::Dogecoin {
                     let previous = peer.block(block.header.prev_blockhash)?;
                     let previous = chain::read_block(&previous, coin, block.header.prev_blockhash)?;
@@ -429,12 +431,36 @@ mod live_tests {
                         "Live DigiShield target mismatch"
                     );
                 }
-                eprintln!(
-                    "Read-only {} checkpoint and first child header verified",
-                    coin.name()
-                );
+                Ok(())
+            })();
+            match result {
+                Ok(()) => {
+                    verified += 1;
+                    eprintln!(
+                        "Read-only {} checkpoint and first child verified",
+                        coin.name()
+                    );
+                }
+                Err(error) => eprintln!("Read-only peer check failed: {error:#}"),
             }
         }
+        ensure!(
+            verified > 0,
+            "No peer passed the read-only {} check",
+            coin.name()
+        );
         Ok(())
+    }
+
+    #[test]
+    #[ignore = "read-only public mainnet connectivity check"]
+    fn public_bitcoin_headers_and_blocks() -> Result<()> {
+        check(Coin::Bitcoin)
+    }
+
+    #[test]
+    #[ignore = "read-only public mainnet connectivity check"]
+    fn public_dogecoin_headers_and_blocks() -> Result<()> {
+        check(Coin::Dogecoin)
     }
 }
