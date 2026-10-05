@@ -104,8 +104,10 @@ impl Api {
 
     fn response(&self, mut request: RequestBuilder) -> Result<Value> {
         if let Some(token) = &self.token { request = request.query(&[("token", token)]); }
-        let response = request.send().context("Cannot reach BlockCypher")?
-            .error_for_status().context("BlockCypher rejected the request (possibly rate-limited)")?;
+        let response = request.send().map_err(reqwest::Error::without_url)
+            .context("Cannot reach BlockCypher")?
+            .error_for_status().map_err(reqwest::Error::without_url)
+            .context("BlockCypher rejected the request (possibly rate-limited)")?;
         Ok(serde_json::from_reader(response.take(2 * 1024 * 1024))?)
     }
 

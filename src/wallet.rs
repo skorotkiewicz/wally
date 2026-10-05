@@ -91,9 +91,10 @@ impl Wallet {
         OsRng.try_fill_bytes(&mut wallet.salt).context("OS randomness unavailable")?;
         OsRng.try_fill_bytes(&mut wallet.nonce).context("OS randomness unavailable")?;
         let encryption_key = password_key(password, &wallet.salt)?;
+        let nonce: Nonce = wallet.nonce.into();
         wallet.encrypted_key = ChaCha20Poly1305::new_from_slice(&*encryption_key)
             .map_err(|_| anyhow::anyhow!("Invalid encryption key"))?
-            .encrypt(Nonce::from_slice(&wallet.nonce), Payload {
+            .encrypt(&nonce, Payload {
                 msg: &*bytes, aad: wallet.aad().as_bytes(),
             }).map_err(|_| anyhow::anyhow!("Key encryption failed"))?;
         Ok(wallet)
@@ -109,9 +110,10 @@ impl Wallet {
     pub fn unlock(&self, password: &str) -> Result<SecretKey> {
         self.validate()?;
         let encryption_key = password_key(password, &self.salt)?;
+        let nonce: Nonce = self.nonce.into();
         let bytes = Zeroizing::new(ChaCha20Poly1305::new_from_slice(&*encryption_key)
             .map_err(|_| anyhow::anyhow!("Invalid encryption key"))?
-            .decrypt(Nonce::from_slice(&self.nonce), Payload {
+            .decrypt(&nonce, Payload {
                 msg: &self.encrypted_key, aad: self.aad().as_bytes(),
             }).map_err(|_| anyhow::anyhow!("Wrong password or damaged wallet"))?);
         let key = SecretKey::from_slice(&bytes)?;

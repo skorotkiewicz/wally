@@ -63,7 +63,7 @@ block explorer before trying another send. Never blindly retry a payment.
 ## Check
 
 ```sh
-cargo fmt --check
+cargo fmt
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
