@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Wally is a native Bitcoin and Dogecoin CLI wallet with direct peer-to-peer networking. Meet WLY, its separate development coin, and build locally.">
+  <meta name="theme-color" content="#f6f5ee">
+  <meta property="og:title" content="Wally Wallet & Wally Coin">
+  <meta property="og:description" content="A wallet that talks to peers. A development chain you can run yourself.">
+  <meta property="og:type" content="website">
+  <title>Wally Wallet & Wally Coin | Straight to the peers</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23efc44a'/%3E%3Cpath d='M6 10l5 13 5-10 5 10 5-13' fill='none' stroke='%23282d24' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <nav class="container navigation" aria-label="Main navigation">
+      <a class="brand" href="#main" aria-label="Wally home">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M6 10l5 13 5-10 5 10 5-13"/></svg>
+        <span>wally<span class="brand-dot">.</span></span>
+      </a>
+      <div class="nav-links">
+        <a href="#wallet">Wallet</a>
+        <a href="#coin">WLY coin</a>
+        <a class="nav-cta" href="#start">Get started <span aria-hidden="true">↗</span></a>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="container hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="small-square" aria-hidden="true"></span> A wallet for the terminal</p>
+        <h1 id="hero-title">Bitcoin. Dogecoin.<br><span>Straight to<br>the peers.</span></h1>
+        <p class="hero-description">Wally connects directly to the network. Your encrypted keys stay on your machine, without a hosted wallet service or a full node to install.</p>
+        <div class="hero-actions">
+          <a class="button button-dark" href="#start">Build Wally <span aria-hidden="true">↗</span></a>
+          <a class="text-link" href="#coin">Meet Wally Coin <span aria-hidden="true">↓</span></a>
+        </div>
+        <p class="hero-note">Native Rust. Bitcoin and Dogecoin mainnet.</p>
+      </div>
+      <div class="hero-visual">
+        <div class="terminal">
+          <div class="terminal-heading"><span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>wally / bitcoin</span><span class="terminal-label">CLI example</span></div>
+          <div class="terminal-content">
+            <p class="terminal-comment"># make a wallet on your machine</p>
+            <p><span class="prompt">$</span> wally init --coin bitcoin</p>
+            <p class="terminal-comment"># get your receiving address</p>
+            <p><span class="prompt">$</span> wally receive bitcoin</p>
+            <p class="terminal-comment"># talk directly to network peers</p>
+            <p><span class="prompt">$</span> wally sync bitcoin</p>
+            <div class="terminal-divider"></div>
+            <p class="terminal-comment"># Dogecoin works here, too</p>
+            <p><span class="prompt">$</span> wally init --coin dogecoin</p>
+          </div>
+          <div class="terminal-footer"><span>Local keys</span><span>Direct P2P</span><span>No wallet API</span></div>
+        </div>
+        <div class="peer-tag"><span aria-hidden="true">↔</span> Your machine. Network peers.</div>
+        <div class="visual-caption"><span class="caption-line" aria-hidden="true"></span> Less between you and the network.</div>
+      </div>
+    </section>
+
+    <div class="container fact-strip" aria-label="Wallet at a glance">
+      <p><strong>BTC + DOGE</strong><span>Two native networks</span></p>
+      <p><strong>Rust</strong><span>A standalone CLI</span></p>
+      <p><strong>P2P</strong><span>No external wallet APIs</span></p>
+      <p><strong>Your keys</strong><span>Encrypted local storage</span></p>
+    </div>
+
+    <section class="container wallet-section section-space" id="wallet" aria-labelledby="wallet-title">
+      <div class="section-intro">
+        <p class="eyebrow">01 / Wally Wallet</p>
+        <h2 id="wallet-title">A small wallet.<br>Real controls.</h2>
+        <p>Create wallets, receive coins, check confirmed balances, sign payments, and send them to peers. All from your terminal.</p>
+        <aside class="notice"><strong>Start small.</strong> Wally is experimental SPV software. It verifies headers and transaction inclusion, not full consensus. It is not a full validating node.</aside>
+      </div>
+      <dl class="feature-list">
+        <div><dt><span class="feature-number">01</span> Keys encrypted at rest</dt><dd>Argon2id and ChaCha20-Poly1305 protect your wallet file. Your password unlocks it locally.</dd></div>
+        <div><dt><span class="feature-number">02</span> Direct peer-to-peer sync</dt><dd>No Bitcoin Core or Dogecoin Core installation required. Wally downloads headers and scans blocks from network peers.</dd></div>
+        <div><dt><span class="feature-number">03</span> Payments you can retry</dt><dd>Pending transactions stay saved. Rebroadcast the exact signed payment instead of creating another one.</dd></div>
+        <div><dt><span class="feature-number">04</span> Backups you control</dt><dd>Keep your wallet JSON, password, and pending-payment state safe. There is no account recovery or password reset.</dd></div>
+      </dl>
+    </section>
+
+    <section class="coin-section" id="coin" aria-labelledby="coin-title">
+      <div class="container coin-layout">
+        <div class="coin-visual">
+          <div class="coin-orbit" aria-hidden="true"></div>
+          <div class="coin-face" aria-hidden="true"><span class="coin-top">WALLY COIN</span><span class="coin-letter">W</span><span class="coin-bottom">WLY · SHA256d</span></div>
+          <p class="coin-caption">No premine. Genesis output unspendable.</p>
+        </div>
+        <div class="coin-copy">
+          <p class="eyebrow">02 / Wally Coin <span class="pill">Development only</span></p>
+          <h2 id="coin-title">Mine your own<br>next block.</h2>
+          <p>Meet WLY, the separate development chain in <code>wly-coin/</code>. A Bitcoin Core-based native node and a matching Wally wallet let you test mining and local payments.</p>
+          <!-- ponytail: static WLY parameters mirror wly-coin/coin.json; update these if that project's parameters change. -->
+          <dl class="coin-stats">
+            <div><dt>Target block time</dt><dd>60<span> seconds</span></dd></div>
+            <div><dt>Initial block reward</dt><dd>50<span> WLY</span></dd></div>
+            <div><dt>Halving interval</dt><dd>210,000<span> blocks</span></dd></div>
+            <div><dt>Coinbase maturity</dt><dd>100<span> blocks</span></dd></div>
+          </dl>
+          <p class="coin-warning">Easy initial proof of work means this chain can be cheaply rewritten. WLY is for development, not a secure public currency or an investment offer.</p>
+          <a class="button button-dark" href="#coin-start">Run WLY locally <span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="container section-space start-section" id="start" aria-labelledby="start-title">
+      <div class="start-heading"><div><p class="eyebrow">03 / Get started</p><h2 id="start-title">Open a terminal.<br>Build it yourself.</h2></div><p>Start in your local Wally source checkout. No hosted signup, browser wallet, or service token required.</p></div>
+      <div class="setup-grid">
+        <article class="setup-card">
+          <div class="setup-heading"><span class="setup-icon" aria-hidden="true">&gt;_</span><div><h3>Wally Wallet</h3><p>Rust 1.89+ and a C compiler</p></div></div>
+          <pre><code><span class="code-comment"># build and install the CLI</span>
+cargo install --path . --locked
+
+<span class="code-comment"># create and sync a Bitcoin wallet</span>
+wally init --coin bitcoin
+wally receive bitcoin
+wally sync bitcoin
+wally balance bitcoin</code></pre>
+          <p>Creation asks for a password of at least 12 characters. Wallets default to <code>~/.wally/</code>. First sync can take a long time and use substantial bandwidth.</p>
+          <details><summary>Before your first payment</summary><p>Use small amounts. Back up your wallet JSON and keep the password separately. After payments, back up the state file with Wally stopped. Fees are fixed rates, not live congestion estimates. Peer handoff does not guarantee confirmation.</p><pre><code>wally rebroadcast bitcoin</code></pre><p>If a payment times out, check its transaction ID before trying again. Rebroadcast the saved payment rather than sending a duplicate.</p></details>
+        </article>
+        <article class="setup-card" id="coin-start">
+          <div class="setup-heading"><span class="setup-icon coin-icon" aria-hidden="true">W</span><div><h3>Wally Coin</h3><p>The same generated WLY project on every node</p></div></div>
+          <pre><code>cd wly-coin
+./build.sh
+./node -daemon
+./wallet init --coin wly
+./wallet receive wly
+
+<span class="code-comment"># replace the placeholder with your address</span>
+./mine &lt;receiving-address&gt; 101
+./rpc getblockchaininfo</code></pre>
+          <p>Builds need Rust 1.89+, CMake 3.22+, C++20, Boost 1.73 to 1.89 headers, and libevent 2.1.8+ development headers. The node binds to localhost by default.</p>
+          <details><summary>Add the second wallet peer</summary><p>Wallet sync needs two distinct peer IPs. Start another node from this same project before checking your WLY balance.</p><pre><code>mkdir -p data2
+./bin/wly-node -datadir="$PWD/data2" \
+  -port=19335 -rpcport=19337 \
+  -bind=127.0.0.2:19335 \
+  -connect=127.0.0.1:19335 -listen=1 \
+  -dnsseed=0 -fixedseeds=0 -daemon
+./wallet --peer 127.0.0.1:19335 \
+  --peer 127.0.0.2:19335 balance wly</code></pre></details>
+          <details><summary>Inspect blocks and addresses</summary><p>For projects with the generated viewer, run <code>./viewer</code> and open <code>http://127.0.0.1:8080</code>. Python's standard library serves the page; the native CLI reads the chain.</p><p>Block searches show transaction details. Address searches show confirmed unspent outputs, not full history. They ignore mempool changes and can include immature mining rewards.</p></details>
+        </article>
+      </div>
+      <div class="chain-note"><span class="eyebrow">Keep the same chain</span><p>WLY is a separate generated project, not an extra coin inside your original Bitcoin or Dogecoin wallet. Get the same generated files to join this WLY chain. Running <code>create-coin.sh</code> again creates a different genesis and network.</p><details><summary>This WLY genesis</summary><code class="genesis-hash">0000238c5f7fe786be598316ca2eaa02ddcbe4807d5ec6f4790d0f4223d02f96</code></details></div>
+    </section>
+
+    <section class="closing-section"><div class="container closing-content"><div><p class="eyebrow">Wally Wallet + Wally Coin</p><h2>Your next command<br>starts here.</h2></div><a class="button button-yellow" href="#start">Get started <span aria-hidden="true">↗</span></a></div></section>
+  </main>
+  <footer class="container site-footer"><a class="brand" href="#main">wally<span class="brand-dot">.</span></a><p>Experimental software. Keep backups. Test with small amounts.</p><a href="#wallet">Know the limits <span aria-hidden="true">↑</span></a></footer>
+</body>
+</html>
