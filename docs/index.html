@@ -112,7 +112,11 @@
       <div class="setup-grid">
         <article class="setup-card">
           <div class="setup-heading"><span class="setup-icon" aria-hidden="true">&gt;_</span><div><h3>Wally Wallet</h3><p>Rust 1.89+ and a C compiler</p></div></div>
-          <pre><code><span class="code-comment"># build and install the CLI</span>
+          <pre><code><span class="code-comment"># get the source</span>
+git clone https://github.com/skorotkiewicz/wally
+cd wally
+
+<span class="code-comment"># build and install the CLI</span>
 cargo install --path . --locked
 
 <span class="code-comment"># create and sync a Bitcoin wallet</span>
