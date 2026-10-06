@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    io::{BufWriter, Read, Write},
+    io::{self, BufWriter, IsTerminal, Read, Write},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 // Dogecoin Core v1.14.9 mainnet checkpoint (January 2024).
@@ -55,6 +56,116 @@ pub fn write_atomic(
     #[cfg(unix)]
     fs::File::open(path.parent().context("Missing storage directory")?)?.sync_all()?;
     Ok(())
+}
+
+struct Progress {
+    label: String,
+    resumed: u32,
+    total: u32,
+    started: Instant,
+    last_draw: Instant,
+    terminal: bool,
+    visible: bool,
+}
+
+impl Progress {
+    fn new(label: String, resumed: u32, total: u32) -> Self {
+        let now = Instant::now();
+        let mut progress = Self {
+            label,
+            resumed,
+            total: total.max(resumed),
+            started: now,
+            last_draw: now,
+            terminal: io::stderr().is_terminal(),
+            visible: false,
+        };
+        if resumed < progress.total {
+            progress.draw(resumed, true);
+        }
+        progress
+    }
+
+    fn line(&self, done: u32, elapsed: Duration) -> String {
+        const WIDTH: u64 = 30;
+        let total = self.total.max(done);
+        let (filled, cached, percent) = if total == 0 {
+            (WIDTH, 0, 100)
+        } else {
+            (
+                u64::from(done) * WIDTH / u64::from(total),
+                u64::from(self.resumed.min(done)) * WIDTH / u64::from(total),
+                u64::from(done) * 100 / u64::from(total),
+            )
+        };
+        let downloaded = done.saturating_sub(self.resumed);
+        let remaining = total - done;
+        let eta = if remaining == 0 {
+            "00:00:00".to_owned()
+        } else if downloaded == 0 || elapsed.is_zero() {
+            "--:--:--".to_owned()
+        } else {
+            let seconds = (elapsed.as_secs_f64() * f64::from(remaining) / f64::from(downloaded))
+                .ceil() as u64;
+            format!(
+                "{:02}:{:02}:{:02}",
+                seconds / 3600,
+                seconds / 60 % 60,
+                seconds % 60
+            )
+        };
+        format!(
+            "{} [{}{}{}] {percent}% eta {eta}",
+            self.label,
+            "+".repeat(cached as usize),
+            "#".repeat((filled - cached) as usize),
+            "-".repeat((WIDTH - filled) as usize),
+        )
+    }
+
+    fn draw(&mut self, done: u32, force: bool) {
+        self.total = self.total.max(done);
+        if self.total == 0 {
+            return;
+        }
+        let interval = if self.terminal {
+            Duration::from_millis(250)
+        } else {
+            Duration::from_secs(10)
+        };
+        if !force && self.last_draw.elapsed() < interval {
+            return;
+        }
+        let line = self.line(done, self.started.elapsed());
+        let mut stderr = io::stderr().lock();
+        if self.terminal {
+            let _ = write!(stderr, "\r{line}\x1b[K");
+            let _ = stderr.flush();
+            self.visible = true;
+        } else {
+            let _ = writeln!(stderr, "{line}");
+        }
+        self.last_draw = Instant::now();
+    }
+
+    fn pause(&mut self) {
+        if self.visible {
+            let _ = writeln!(io::stderr().lock());
+            self.visible = false;
+        }
+    }
+
+    fn finish(&mut self, done: u32) {
+        self.total = done;
+        self.draw(done, true);
+        self.pause();
+    }
+}
+
+impl Drop for Progress {
+    fn drop(&mut self) {
+        self.pause();
+    }
 }
 
 struct Headers {
@@ -126,12 +237,16 @@ impl Headers {
             );
         } else {
             let mut requested = hash;
-            for _ in 0..=anchor {
+            let mut progress =
+                Progress::new(format!("{} checkpoint", coin.name()), 0, anchor as u32 + 1);
+            for index in 0..=anchor {
                 let raw = fetch_block(peers, coin, requested)?;
                 let block = chain::read_block(&raw, coin, requested)?;
                 requested = block.header.prev_blockhash;
                 entries.push(block.header);
+                progress.draw(index as u32 + 1, false);
             }
+            progress.finish(anchor as u32 + 1);
             entries.reverse();
         }
         ensure!(
@@ -176,7 +291,13 @@ impl Headers {
         result
     }
 
-    fn sync_peer(&self, path: &Path, peer: &mut Peer, coin: Coin) -> Result<Self> {
+    fn sync_peer(
+        &self,
+        path: &Path,
+        peer: &mut Peer,
+        coin: Coin,
+        progress: &mut Progress,
+    ) -> Result<Self> {
         let mut candidate = Self {
             base: self.base,
             anchor: self.anchor,
@@ -256,11 +377,7 @@ impl Headers {
             if batches.is_multiple_of(25) && candidate.total_work > self.total_work {
                 candidate.save(path)?;
             }
-            eprintln!(
-                "Verified {} headers through height {}",
-                coin.name(),
-                candidate.tip()
-            );
+            progress.draw(candidate.tip() - (self.base + self.anchor as u32), false);
         }
     }
 
@@ -271,12 +388,24 @@ impl Headers {
         peers: &mut Vec<Peer>,
         explicit: &[String],
     ) -> Result<()> {
+        let first_height = self.base + self.anchor as u32;
+        let target = peers
+            .iter()
+            .map(|peer| peer.height)
+            .max()
+            .unwrap_or(self.tip());
+        let mut progress = Progress::new(
+            format!("{} headers", coin.name()),
+            self.tip() - first_height,
+            target.saturating_sub(first_height),
+        );
         let mut accepted = Vec::new();
         let mut ips = HashSet::new();
         let mut errors = Vec::new();
         let mut candidates = std::mem::take(peers);
         for attempt in 0..3 {
             if attempt > 0 {
+                progress.pause();
                 match peer::discover(coin, explicit) {
                     Ok(found) => candidates = found,
                     Err(error) => {
@@ -290,7 +419,8 @@ impl Headers {
                 if ips.contains(&ip) {
                     continue;
                 }
-                match self.sync_peer(path, &mut peer, coin) {
+                progress.total = progress.total.max(peer.height.saturating_sub(first_height));
+                match self.sync_peer(path, &mut peer, coin, &mut progress) {
                     Ok(candidate) => {
                         if candidate.total_work > self.total_work {
                             *self = candidate;
@@ -302,6 +432,7 @@ impl Headers {
                         }
                     }
                     Err(error) => {
+                        progress.pause();
                         eprintln!("Replacing failed peer: {error:#}");
                         errors.push(error.to_string());
                         // Resume verified batches rather than repeating expensive Scrypt work.
@@ -338,7 +469,9 @@ impl Headers {
             "Chain tip is stale; refusing to report a current balance or send"
         );
         *peers = accepted;
-        self.save(path)
+        self.save(path)?;
+        progress.finish(self.tip() - first_height);
+        Ok(())
     }
 }
 
@@ -542,6 +675,11 @@ impl Session {
             eprintln!("Chain reorganization detected; rescanning wallet history");
         }
         let mut ledger = state.ledger(&headers, &own)?;
+        let mut progress = Progress::new(
+            format!("{} blocks", wallet.coin.name()),
+            state.height.saturating_sub(initial_height),
+            headers.tip().saturating_sub(initial_height),
+        );
         for height in state.height + 1..=headers.tip() {
             let hash = headers.get(height)?.block_hash();
             let raw = fetch_block(&mut peers, wallet.coin, hash)?;
@@ -567,10 +705,11 @@ impl Session {
             state.hash = hash.to_string();
             if height % 100 == 0 {
                 state.save(&state_path)?;
-                eprintln!("Scanned wallet through height {height}");
             }
+            progress.draw(height.saturating_sub(initial_height), false);
         }
         state.save(&state_path)?;
+        progress.finish(state.height.saturating_sub(initial_height));
         Ok(Self {
             _lock: lock,
             peers,
@@ -650,6 +789,47 @@ impl Session {
 mod tests {
     use super::*;
     use bitcoin::{Amount, TxIn, TxOut, Txid, absolute, hashes::Hash, transaction};
+
+    #[test]
+    fn progress_resume_and_eta() {
+        let now = Instant::now();
+        let mut progress = Progress {
+            label: "headers".into(),
+            resumed: 20,
+            total: 100,
+            started: now,
+            last_draw: now,
+            terminal: false,
+            visible: false,
+        };
+        assert_eq!(
+            progress.line(20, Duration::ZERO),
+            "headers [++++++------------------------] 20% eta --:--:--"
+        );
+        assert_eq!(
+            progress.line(40, Duration::from_secs(20)),
+            "headers [++++++######------------------] 40% eta 00:01:00"
+        );
+        assert_eq!(
+            progress.line(100, Duration::from_secs(80)),
+            "headers [++++++########################] 100% eta 00:00:00"
+        );
+        // A fork may temporarily move progress below the saved starting height.
+        assert_eq!(
+            progress.line(10, Duration::from_secs(20)),
+            "headers [+++---------------------------] 10% eta --:--:--"
+        );
+        progress.resumed = 0;
+        progress.total = 0;
+        progress.draw(0, true);
+        assert_eq!(progress.last_draw, now);
+        progress.total = 100;
+        assert!(
+            progress
+                .line(1, Duration::from_millis(10))
+                .ends_with("eta 00:00:01")
+        );
+    }
 
     fn entry(block: &bitcoin::Block, height: u32, tx: &Transaction) -> Entry {
         let proof = MerkleBlock::from_block_with_predicate(block, |id| *id == tx.compute_txid());
