@@ -43,11 +43,15 @@ def decode_reply(command, text):
 
 
 def rpc(command, *args):
-    if command not in {'getblockchaininfo', 'getblockhash', 'getblock'}:
+    if command not in {'getblockchaininfo', 'getblockhash', 'getblock', 'validateaddress', 'scantxoutset'}:
         raise ValueError('Viewer RPC is read-only.')
+    if command == 'scantxoutset' and (len(args) != 2 or args[0] != 'start'):
+        raise ValueError('Viewer only starts address UTXO scans.')
+    timeout = 310 if command == 'scantxoutset' else 10
     result = subprocess.run([str(ROOT / 'rpc'), '-rpcconnect=127.0.0.1',
-                             f'-rpcport={COIN["rpc_port"]}', command, *map(str, args)],
-                            check=True, capture_output=True, text=True, timeout=10)
+                             f'-rpcport={COIN["rpc_port"]}', f'-rpcclienttimeout={timeout - 1}',
+                             command, *map(str, args)],
+                            check=True, capture_output=True, text=True, timeout=timeout)
     return decode_reply(command, result.stdout)
 
 
@@ -57,6 +61,12 @@ def block_id(value):
     if re.fullmatch(r'[0-9a-fA-F]{64}', value):
         return value.lower()
     raise ValueError('Enter a block height or a 64-character block hash.')
+
+
+def address_id(value):
+    if not re.fullmatch(r'[A-Za-z0-9]{14,90}', value):
+        raise ValueError('Enter an address for this coin, not a descriptor or RPC option.')
+    return value
 
 
 def block_link(value, text):
@@ -80,6 +90,8 @@ summary{cursor:pointer;overflow-wrap:anywhere}.note{color:#6c6251}
             escape(str(COIN['symbol'])) + ')</a></nav><p class="note">Local, read-only development-chain viewer.</p>' +
             '<form action="/block"><input name="id" aria-label="Block height or block hash" '
             'placeholder="Block height or block hash" required><button>Find block</button></form>' +
+            '<form action="/address"><input name="id" aria-label="Coin address" '
+            'placeholder="Coin address" required><button>Find address</button></form>' +
             '<h1>' + escape(title) + '</h1>' + body + '</body></html>').encode('utf-8')
 
 
@@ -94,6 +106,20 @@ def block_body(block):
         body += '<details><summary>' + escape(str(tx['txid'])) + '</summary><pre>'
         body += escape(json.dumps(tx, indent=2, default=lambda amount: format(amount, 'f'))) + '</pre></details>'
     return body
+
+
+def address_body(scan):
+    body = '<p>Confirmed unspent: <strong>' + format(scan['total_amount'], '.8f') + ' ' + escape(str(COIN['symbol'])) + '</strong></p>'
+    body += '<p>Snapshot at block ' + block_link(scan['bestblock'], scan['height']) + '.</p>'
+    body += '<p class="note">Ignores mempool changes; may include immature mining rewards. Not spent transactions or full history.</p>'
+    if not scan['unspents']:
+        return body + '<p>No unspent outputs.</p>'
+    body += '<table><thead><tr><th>Transaction:output</th><th>Amount</th><th>Block</th><th>Confirmations</th></tr></thead><tbody>'
+    for output in scan['unspents']:
+        body += '<tr><td><code>' + escape(str(output['txid'])) + ':' + escape(str(output['vout'])) + '</code></td>'
+        body += '<td>' + format(output['amount'], '.8f') + '</td><td>' + block_link(output['blockhash'], output['height'])
+        body += '</td><td>' + escape(str(output['confirmations'])) + '</td></tr>'
+    return body + '</tbody></table>'
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -117,13 +143,27 @@ class Handler(BaseHTTPRequestHandler):
             if len(self.path) > 256:
                 raise ValueError('Request too long.')
             url = urlsplit(self.path)
-            if url.path not in ('/', '/block'):
+            if url.path not in ('/', '/block', '/address'):
                 self.reply(404, 'Not found', '<p>No such page.</p>')
                 return
             params = parse_qs(url.query, max_num_fields=1)
-            value = block_id(params.get('id', [''])[0].strip()) if url.path == '/block' else None
+            value = params.get('id', [''])[0].strip()
+            if url.path == '/block':
+                value = block_id(value)
+            elif url.path == '/address':
+                value = address_id(value)
             if rpc('getblockhash', 0) != COIN['genesis_hash']:
                 self.reply(503, 'Wrong node', '<p>The node genesis does not match this coin.</p>')
+                return
+            if url.path == '/address':
+                if not rpc('validateaddress', value)['isvalid']:
+                    raise ValueError('Invalid address or address for a different coin.')
+                # ponytail: synchronous full UTXO scan; cache/index addresses if frequent scans become slow.
+                scan = rpc('scantxoutset', 'start', json.dumps([f'addr({value})']))
+                if not scan['success']:
+                    self.reply(503, 'Scan incomplete', '<p>No balance shown because the UTXO scan did not finish. Retry later.</p>')
+                    return
+                self.reply(200, 'Address ' + value, address_body(scan))
                 return
             if url.path == '/block':
                 block_hash = rpc('getblockhash', value) if isinstance(value, int) else value
@@ -141,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as error:
             self.reply(400, 'Invalid request', '<p>' + escape(str(error)) + '</p>')
         except (OSError, subprocess.SubprocessError):
-            self.reply(503, 'Node unavailable or block not found', '<p>Build and start the native node with <code>./node -daemon</code>, then check the block height/hash.</p>')
+            self.reply(503, 'Node or scan unavailable', '<p>Build and start the native node with <code>./node -daemon</code>, then check the block height/hash or retry after any running UTXO scan finishes.</p>')
 
 
 def check():
@@ -162,11 +202,30 @@ def check():
         pass
     else:
         raise AssertionError('Write RPC allowed')
+    assert address_id('gsz39BPM7See7TthqkGBtxuDnf7FKJT6oG') == 'gsz39BPM7See7TthqkGBtxuDnf7FKJT6oG'
+    for value in ('-rpcconnect=remote', 'addr(test)', '<script>', 'a' * 91):
+        try:
+            address_id(value)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(value)
+    try:
+        rpc('scantxoutset', 'abort')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('Abort scan allowed')
+    scan = {'total_amount': Decimal('0.00000001'), 'height': 1, 'bestblock': 'a' * 64,
+            'unspents': [{'txid': '<unsafe>', 'vout': 0, 'amount': Decimal('0.00000001'),
+                          'blockhash': 'a' * 64, 'height': 1, 'confirmations': 1}]}
+    assert '0.00000001' in address_body(scan) and '&lt;unsafe&gt;' in address_body(scan)
+    assert 'No unspent outputs' in address_body(dict(scan, total_amount=Decimal(0), unspents=[]))
     body = block_body({'hash': 'a' * 64, 'tx': [{'txid': 'b' * 64, 'data': '<script>alert(1)</script>', 'value': Decimal('0.00000001')}]})
     rendered = page('<unsafe>', body)
     assert b'<script>' not in rendered and b'&lt;script&gt;' in rendered
     assert b'&lt;unsafe&gt;' in rendered and b'0.00000001' in rendered
-    print('Viewer checks passed: search validation, read-only RPC, HTML escaping, exact amounts.')
+    print('Viewer checks passed: block/address validation, read-only RPC, UTXO rendering, HTML escaping, exact amounts.')
 
 
 if __name__ == '__main__':
@@ -537,7 +596,10 @@ encryption, progress bars, scan recovery and pending rebroadcast stay native.
 Keep wallet JSON/passwords and pending state backed up. Original Wally is unchanged.
 
 Start the read-only web viewer: `./viewer`, then open http://127.0.0.1:8080.
-It shows recent blocks and transaction details, with block height/hash search.
+It shows recent blocks and transaction details, with block height/hash and address search.
+Address search uses the node's UTXO scan: confirmed unspent balance, outputs, and block links,
+not spent transactions or full history. Ignores mempool changes and may include immature
+mining rewards. Scans can take time on large UTXO sets; incomplete scans show no balance.
 Uses Python's standard library and the native CLI, never external APIs or wallet files.
 Use `./viewer 8081` for another local port; `./viewer --check` runs its offline checks.
 ''')

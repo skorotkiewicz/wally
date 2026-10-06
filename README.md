@@ -64,3 +64,9 @@ The generated README has build, node and mining commands. Initial PoW is easy:
 **development only, not a secure public currency**. Existing wallets are unchanged.
 
 Check a built project locally: `python3 tests/create_coin.py /path/to/generated-coin`.
+
+ ```bash
+   ./create-coin.sh --viewer-only ./wly-coin
+   cd wly-coin
+   ./viewer
+ ```
