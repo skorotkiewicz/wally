@@ -1,0 +1,29 @@
+# Keep build inputs only. Runtime data and generated outputs stay ignored.
+/*
+!/.gitignore
+!/build.sh
+!/coin.json
+!/node-src/
+!/wallet-src/
+
+/wallet-src/*
+!/wallet-src/Cargo.toml
+!/wallet-src/Cargo.lock
+!/wallet-src/src/
+!/wallet-src/tests/
+/wallet-src/tests/*
+!/wallet-src/tests/data/
+
+# Ignore generated files inside otherwise allowed source trees.
+**/target/
+**/__pycache__/
+*.pyc
+
+!bin
+!mine
+!node
+!README.md
+!rpc
+!viewer
+!viewer.py
+!wallet
