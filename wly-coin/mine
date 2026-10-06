@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+[[ $# -ge 1 && $# -le 2 ]] || { echo 'Usage: ./mine ADDRESS [BLOCKS]' >&2; exit 1; }
+exec "$root/rpc" generatetoaddress "${2:-1}" "$1" 10000000

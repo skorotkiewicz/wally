@@ -3,7 +3,8 @@
 !/.gitignore
 !/build.sh
 !/coin.json
-!/node-src/
+!/bitcoin-core.patch
+!/test_build.py
 !/wallet-src/
 
 /wallet-src/*
@@ -19,7 +20,7 @@
 **/__pycache__/
 *.pyc
 
-!bin
+# !bin
 !mine
 !node
 !README.md
