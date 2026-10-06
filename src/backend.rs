@@ -8,13 +8,14 @@ use bitcoin::{
     BlockHash, MerkleBlock, OutPoint, ScriptBuf, Transaction, VarInt, Work, block::Header,
     consensus,
 };
+use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    io::{self, BufWriter, IsTerminal, Read, Write},
+    io::{BufWriter, Read, Write},
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 // Dogecoin Core v1.14.9 mainnet checkpoint (January 2024).
@@ -58,113 +59,67 @@ pub fn write_atomic(
     Ok(())
 }
 
+fn download_marks(resumed: u64, done: u64, total: u64) -> String {
+    let total = total.max(done).max(1);
+    let filled = done * 30 / total;
+    let cached = resumed.min(done) * 30 / total;
+    format!(
+        "{}{}{}",
+        "+".repeat(cached as usize),
+        "#".repeat((filled - cached) as usize),
+        "-".repeat((30 - filled) as usize),
+    )
+}
+
 struct Progress {
-    label: String,
-    resumed: u32,
+    bar: ProgressBar,
     total: u32,
-    started: Instant,
-    last_draw: Instant,
-    terminal: bool,
-    visible: bool,
 }
 
 impl Progress {
     fn new(label: String, resumed: u32, total: u32) -> Self {
-        let now = Instant::now();
-        let mut progress = Self {
-            label,
-            resumed,
-            total: total.max(resumed),
-            started: now,
-            last_draw: now,
-            terminal: io::stderr().is_terminal(),
-            visible: false,
-        };
-        if resumed < progress.total {
-            progress.draw(resumed, true);
-        }
-        progress
-    }
-
-    fn line(&self, done: u32, elapsed: Duration) -> String {
-        const WIDTH: u64 = 30;
-        let total = self.total.max(done);
-        let (filled, cached, percent) = if total == 0 {
-            (WIDTH, 0, 100)
-        } else {
-            (
-                u64::from(done) * WIDTH / u64::from(total),
-                u64::from(self.resumed.min(done)) * WIDTH / u64::from(total),
-                u64::from(done) * 100 / u64::from(total),
-            )
-        };
-        let downloaded = done.saturating_sub(self.resumed);
-        let remaining = total - done;
-        let eta = if remaining == 0 {
-            "00:00:00".to_owned()
-        } else if downloaded == 0 || elapsed.is_zero() {
-            "--:--:--".to_owned()
-        } else {
-            let seconds = (elapsed.as_secs_f64() * f64::from(remaining) / f64::from(downloaded))
-                .ceil() as u64;
-            format!(
-                "{:02}:{:02}:{:02}",
-                seconds / 3600,
-                seconds / 60 % 60,
-                seconds % 60
-            )
-        };
-        format!(
-            "{} [{}{}{}] {percent}% eta {eta}",
-            self.label,
-            "+".repeat(cached as usize),
-            "#".repeat((filled - cached) as usize),
-            "-".repeat((WIDTH - filled) as usize),
+        let total = total.max(resumed);
+        let style = ProgressStyle::with_template(
+            "{spinner:.green} {msg} [{download_bar}] {percent}% eta {eta_precise}",
         )
+        .expect("Valid progress template")
+        .with_key(
+            "download_bar",
+            move |state: &ProgressState, w: &mut dyn std::fmt::Write| {
+                let _ = write!(
+                    w,
+                    "{}",
+                    download_marks(u64::from(resumed), state.pos(), state.len().unwrap_or(0))
+                );
+            },
+        );
+        let bar = if total == 0 {
+            ProgressBar::hidden()
+        } else {
+            ProgressBar::new(u64::from(total))
+        }
+        .with_style(style)
+        .with_message(label)
+        .with_position(u64::from(resumed));
+        // Record the cached position before resetting ETA, so only new work affects speed.
+        bar.tick();
+        bar.reset_eta();
+        if total > resumed {
+            bar.enable_steady_tick(Duration::from_millis(100));
+        }
+        Self { bar, total }
     }
 
-    fn draw(&mut self, done: u32, force: bool) {
+    fn update(&mut self, done: u32) {
         self.total = self.total.max(done);
-        if self.total == 0 {
-            return;
-        }
-        let interval = if self.terminal {
-            Duration::from_millis(250)
-        } else {
-            Duration::from_secs(10)
-        };
-        if !force && self.last_draw.elapsed() < interval {
-            return;
-        }
-        let line = self.line(done, self.started.elapsed());
-        let mut stderr = io::stderr().lock();
-        if self.terminal {
-            let _ = write!(stderr, "\r{line}\x1b[K");
-            let _ = stderr.flush();
-            self.visible = true;
-        } else {
-            let _ = writeln!(stderr, "{line}");
-        }
-        self.last_draw = Instant::now();
-    }
-
-    fn pause(&mut self) {
-        if self.visible {
-            let _ = writeln!(io::stderr().lock());
-            self.visible = false;
-        }
+        self.bar.set_length(u64::from(self.total));
+        self.bar.set_position(u64::from(done));
     }
 
     fn finish(&mut self, done: u32) {
-        self.total = done;
-        self.draw(done, true);
-        self.pause();
-    }
-}
-
-impl Drop for Progress {
-    fn drop(&mut self) {
-        self.pause();
+        self.bar.set_length(u64::from(done));
+        self.bar.set_position(u64::from(done));
+        self.bar.finish();
     }
 }
 
@@ -244,7 +199,7 @@ impl Headers {
                 let block = chain::read_block(&raw, coin, requested)?;
                 requested = block.header.prev_blockhash;
                 entries.push(block.header);
-                progress.draw(index as u32 + 1, false);
+                progress.update(index as u32 + 1);
             }
             progress.finish(anchor as u32 + 1);
             entries.reverse();
@@ -377,7 +332,7 @@ impl Headers {
             if batches.is_multiple_of(25) && candidate.total_work > self.total_work {
                 candidate.save(path)?;
             }
-            progress.draw(candidate.tip() - (self.base + self.anchor as u32), false);
+            progress.update(candidate.tip() - (self.base + self.anchor as u32));
         }
     }
 
@@ -405,8 +360,7 @@ impl Headers {
         let mut candidates = std::mem::take(peers);
         for attempt in 0..3 {
             if attempt > 0 {
-                progress.pause();
-                match peer::discover(coin, explicit) {
+                match progress.bar.suspend(|| peer::discover(coin, explicit)) {
                     Ok(found) => candidates = found,
                     Err(error) => {
                         errors.push(error.to_string());
@@ -432,8 +386,9 @@ impl Headers {
                         }
                     }
                     Err(error) => {
-                        progress.pause();
-                        eprintln!("Replacing failed peer: {error:#}");
+                        progress
+                            .bar
+                            .suspend(|| eprintln!("Replacing failed peer: {error:#}"));
                         errors.push(error.to_string());
                         // Resume verified batches rather than repeating expensive Scrypt work.
                         if path.try_exists()? {
@@ -706,7 +661,7 @@ impl Session {
             if height % 100 == 0 {
                 state.save(&state_path)?;
             }
-            progress.draw(height.saturating_sub(initial_height), false);
+            progress.update(height.saturating_sub(initial_height));
         }
         state.save(&state_path)?;
         progress.finish(state.height.saturating_sub(initial_height));
@@ -791,44 +746,34 @@ mod tests {
     use bitcoin::{Amount, TxIn, TxOut, Txid, absolute, hashes::Hash, transaction};
 
     #[test]
-    fn progress_resume_and_eta() {
-        let now = Instant::now();
-        let mut progress = Progress {
-            label: "headers".into(),
-            resumed: 20,
-            total: 100,
-            started: now,
-            last_draw: now,
-            terminal: false,
-            visible: false,
-        };
+    fn indicatif_progress_resume_and_reorg() {
         assert_eq!(
-            progress.line(20, Duration::ZERO),
-            "headers [++++++------------------------] 20% eta --:--:--"
+            download_marks(20, 20, 100),
+            "++++++------------------------"
         );
         assert_eq!(
-            progress.line(40, Duration::from_secs(20)),
-            "headers [++++++######------------------] 40% eta 00:01:00"
+            download_marks(20, 40, 100),
+            "++++++######------------------"
         );
         assert_eq!(
-            progress.line(100, Duration::from_secs(80)),
-            "headers [++++++########################] 100% eta 00:00:00"
+            download_marks(20, 100, 100),
+            "++++++########################"
         );
-        // A fork may temporarily move progress below the saved starting height.
         assert_eq!(
-            progress.line(10, Duration::from_secs(20)),
-            "headers [+++---------------------------] 10% eta --:--:--"
+            download_marks(20, 10, 100),
+            "+++---------------------------"
         );
-        progress.resumed = 0;
-        progress.total = 0;
-        progress.draw(0, true);
-        assert_eq!(progress.last_draw, now);
-        progress.total = 100;
-        assert!(
-            progress
-                .line(1, Duration::from_millis(10))
-                .ends_with("eta 00:00:01")
-        );
+        assert_eq!(download_marks(0, 0, 0), "------------------------------");
+        let mut progress = Progress::new("headers".into(), 20, 100);
+        assert_eq!(progress.bar.position(), 20);
+        progress.update(40);
+        assert_eq!(progress.bar.position(), 40);
+        progress.update(10);
+        assert_eq!(progress.bar.position(), 10);
+        progress.update(120);
+        assert_eq!(progress.bar.length(), Some(120));
+        progress.finish(120);
+        assert!(progress.bar.is_finished());
     }
 
     fn entry(block: &bitcoin::Block, height: u32, tx: &Transaction) -> Entry {
