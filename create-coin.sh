@@ -194,8 +194,8 @@ patch(node / 'src/validation.cpp', 'CAmount nSubsidy = 50 * COIN;', f'CAmount nS
 patch(node / 'src/consensus/amount.h', 'MAX_MONEY = 21000000 * COIN;', f'MAX_MONEY = {max_money};')
 patch(node / 'src/chainparamsbase.cpp', 'CBaseChainParams>("", 8332)', f'CBaseChainParams>("", {rpc_port})')
 patch(node / 'src/chainparams.cpp',
-      'CreateChainParams(const ArgsManager& args, const ChainType chain)\n{',
-      'CreateChainParams(const ArgsManager& args, const ChainType chain)\n{\n'
+      'void SelectParams(const ChainType chain)\n{',
+      'void SelectParams(const ChainType chain)\n{\n'
       '    if (chain != ChainType::MAIN) throw std::runtime_error("This fork only supports its own chain.");')
 patch(node / 'CMakeLists.txt', 'set(CLIENT_NAME "Bitcoin Core")', f'set(CLIENT_NAME "{name} Core")')
 

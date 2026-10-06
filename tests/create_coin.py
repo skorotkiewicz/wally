@@ -2,6 +2,7 @@
 """Run after building a generated coin: python3 tests/create_coin.py /path/to/coin.
 Uses only local native nodes and temporary wallets. Keeps artifacts for inspection.
 """
+from decimal import Decimal
 import errno
 import hashlib
 import json
@@ -47,7 +48,7 @@ def rpc(index, *args):
         str(project / 'bin' / f'{slug}-cli'), f'-datadir={work / str(index)}',
         f'-rpcport={rpc_ports[index]}', *map(str, args)], stderr=subprocess.DEVNULL, text=True)
     try:
-        return json.loads(output)
+        return json.loads(output, parse_float=Decimal)
     except json.JSONDecodeError:
         return output.strip()
 
@@ -60,7 +61,8 @@ def interactive(args, prompts):
     if pid == 0:
         os.execv(wallet[0], wallet + args)
     transcript = b''
-    deadline = time.monotonic() + 60
+    # Wallet relay can wait up to 60 seconds for each of its two peers.
+    deadline = time.monotonic() + 180
     try:
         for prompt, reply in prompts:
             while prompt not in transcript:
@@ -144,17 +146,21 @@ try:
     assert len(state['outgoing']) == 1
     txid = hashlib.sha256(hashlib.sha256(bytes.fromhex(state['outgoing'][0])).digest()).digest()[::-1].hex()
     assert pending == [txid], 'Native node did not accept the saved signed payment'
+    fee = int(rpc(0, 'getmempoolentry', txid)['fees']['base'] * 100000000)
     block = rpc(0, 'generatetoaddress', 1, receiver, 10000000)[0]
     assert txid in rpc(0, 'getblock', block)['tx']
     wait(lambda: rpc(1, 'getblockcount') == 102)
     balance = subprocess.check_output(wallet + ['balance', 'receiver'], text=True)
-    assert balance.startswith(f'{coin["reward"] + 1}.00000000 {slug} confirmed'), balance
+    received = 100000000 + fee + ((coin['reward'] * 100000000) >> (102 // coin['halving']))
+    assert balance.startswith(f'{received // 100000000}.{received % 100000000:08d} {slug} confirmed'), balance
     subprocess.run(wallet + ['sync', 'sender'], check=True)
     restored = subprocess.check_output(wallet + ['balance', 'receiver'], text=True)
     assert restored == balance, 'Cache reload changed the confirmed balance'
-    wrong_chain = subprocess.run([str(project / 'bin' / f'{slug}-node'),
-                                  f'-datadir={work / "0"}', '-regtest'], capture_output=True)
-    assert wrong_chain.returncode != 0, 'Fork accidentally supports Bitcoin regtest'
+    for flag in ('-regtest', '-testnet', '-testnet4', '-signet'):
+        wrong_chain = subprocess.run([str(project / 'bin' / f'{slug}-node'),
+                                      f'-datadir={work / "0"}', flag], capture_output=True)
+        assert wrong_chain.returncode != 0, f'Fork accidentally supports {flag}'
+        assert b'This fork only supports its own chain.' in wrong_chain.stderr + wrong_chain.stdout
     print('PASS: input validation, genesis, two native nodes, mining, signed payment, confirmation and cache reload.')
 finally:
     for index, node in enumerate(nodes):
