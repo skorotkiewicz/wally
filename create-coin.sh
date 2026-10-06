@@ -260,8 +260,8 @@ if (( $# > 0 )); then
     exit
 fi
 ask() { local answer; read -r -p "$1 [$2]: " answer; printf '%s' "${answer:-$2}"; }
-name=$(ask 'Coin name' Wally)
-symbol=$(ask 'Symbol' WLY)
+name=$(ask 'Coin name' 'Custom')
+symbol=$(ask 'Symbol' CTM)
 spacing=$(ask 'Seconds per block' 60)
 reward=$(ask 'Initial reward, whole coins' 50)
 halving=$(ask 'Halving interval, blocks' 210000)
