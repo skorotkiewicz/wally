@@ -54,3 +54,13 @@ wally rebroadcast bitcoin
 
 Peer handoff does not guarantee confirmation. Never create another payment just
 to retry a pending one.
+
+## Create a development coin
+
+Run `bash ./create-coin.sh`. It asks for coin parameters and creates a separate
+Bitcoin-based node and matching Wally wallet, with an optional native build.
+No external wallet APIs; source/dependency downloads may need internet.
+The generated README has build, node and mining commands. Initial PoW is easy:
+**development only, not a secure public currency**. Existing wallets are unchanged.
+
+Check a built project locally: `python3 tests/create_coin.py /path/to/generated-coin`.

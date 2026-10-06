@@ -248,6 +248,9 @@ path.write_text(text)
 patch(wallet / 'src/main.rs', 'mod chain;', 'mod chain;\nmod coin;')
 patch(wallet / 'src/main.rs', 'Standalone Bitcoin and Dogecoin wallets (mainnet)', f'{name} ({symbol}) development wallet and Dogecoin wallet')
 patch(wallet / 'src/main.rs', '.join(".wally")', f'.join(".{slug}-wallet")')
+patch(wallet / 'src/backend.rs',
+      'assert!(headers.tip() >= chain::BITCOIN_CHECKPOINT_HEIGHT);',
+      'assert_eq!(headers.get(0)?.block_hash().to_string(), chain::BITCOIN_CHECKPOINT_HASH);')
 path = wallet / 'src/peer.rs'
 text = replace(path.read_text(), 'Coin::Bitcoin => [0xf9, 0xbe, 0xb4, 0xd9],', 'Coin::Bitcoin => crate::coin::MAGIC,')
 text = sub(text, r'Coin::Bitcoin => \(\s*8333,\s*&\[.*?\],\s*\),', 'Coin::Bitcoin => (crate::coin::PORT, &[]),')
